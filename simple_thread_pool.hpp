@@ -35,18 +35,29 @@ namespace dmitigr::concur {
 /// Simple thread pool.
 class Simple_thread_pool final {
 public:
+  /// A task.
+  using Task = std::function<void()>;
+
   /// A logger.
   using Logger = std::function<void(std::string_view)>;
 
   /// The destructor.
   ~Simple_thread_pool()
   {
-    const std::lock_guard lg{work_mutex_};
-    is_started_ = false;
-    state_changed_.notify_all();
-    for (auto& worker : workers_) {
-      DMITIGR_ASSERT(worker.joinable());
-      worker.join();
+    // Stop queue.
+    {
+      const std::lock_guard lg{queue_.mutex};
+      queue_.is_started = false;
+    }
+    queue_.changed.notify_all();
+
+    // Join pool.
+    {
+      const std::lock_guard lg{pool_.mutex};
+      for (auto& thread : pool_.threads) {
+        DMITIGR_ASSERT(thread.joinable());
+        thread.join();
+      }
     }
   }
 
@@ -90,80 +101,86 @@ public:
     if (!size)
       throw Exception{"cannot create thread pool: empty pool is not allowed"};
 
-    is_started_ = true;
-    workers_.resize(size);
-    for (auto& worker : workers_)
-      worker = std::thread{&Simple_thread_pool::wait_and_run, this};
+    queue_.is_started = true;
+    pool_.threads.reserve(size);
+    for (std::size_t i{}; i < size; ++i)
+      pool_.threads.emplace_back(&Simple_thread_pool::wait_and_run, this);
   }
 
   /// @}
 
   /**
-   * @brief Submit the function to run on the thread pool.
+   * @brief Submit the task to run on the thread pool.
    *
    * @par Requires
-   * `function`.
+   * `task`.
    */
-  void submit(std::function<void()> function)
+  void submit(Task task)
   {
-    if (!function)
-      throw Exception{"thread pool worker is invalid"};
+    if (!task)
+      throw Exception{"cannot submit invalid task to thread pool"};
 
-    const std::lock_guard lg{queue_mutex_};
-    queue_.push(std::move(function));
-    state_changed_.notify_one();
+    const std::lock_guard lg{queue_.mutex};
+    queue_.tasks.push(std::move(task));
+    queue_.changed.notify_one();
   }
 
-  /// Clears the queue of unstarted works.
+  /// Clears the queue of unstarted tasks.
   void clear() noexcept
   {
-    const std::lock_guard lg{queue_mutex_};
-    queue_ = {};
+    const std::lock_guard lg{queue_.mutex};
+    queue_.tasks = {};
   }
 
-  /// @returns The size of work queue.
+  /// @returns The size of task queue.
   std::size_t queue_size() const noexcept
   {
-    const std::lock_guard lg{queue_mutex_};
-    return queue_.size();
+    const std::lock_guard lg{queue_.mutex};
+    return queue_.tasks.size();
   }
 
   /// @returns The thread pool size.
   std::size_t size() const noexcept
   {
-    const std::lock_guard lg{work_mutex_};
-    return workers_.size();
+    const std::lock_guard lg{pool_.mutex};
+    return pool_.threads.size();
   }
 
 private:
-  std::condition_variable state_changed_;
-  mutable std::mutex queue_mutex_;
-  std::queue<std::function<void()>> queue_;
-  mutable std::mutex work_mutex_;
-  std::vector<std::thread> workers_;
-  bool is_started_{};
+  struct {
+    mutable std::mutex mutex;
+    std::condition_variable changed;
+    std::queue<Task> tasks;
+    bool is_started{};
+  } queue_;
+
+  struct {
+    mutable std::mutex mutex;
+    std::vector<std::thread> threads;
+  } pool_;
+
   Logger logger_;
 
   void wait_and_run() noexcept
   {
     while (true) {
       try {
-        std::function<void()> func;
+        Task task;
         {
-          std::unique_lock lk{queue_mutex_};
-          state_changed_.wait(lk, [this]
+          std::unique_lock lk{queue_.mutex};
+          queue_.changed.wait(lk, [this]
           {
-            return !queue_.empty() || !is_started_;
+            return !queue_.tasks.empty() || !queue_.is_started;
           });
-          if (is_started_) {
-            DMITIGR_ASSERT(!queue_.empty());
-            func = std::move(queue_.front());
-            DMITIGR_ASSERT(func);
-            queue_.pop();
+          if (queue_.is_started) {
+            DMITIGR_ASSERT(!queue_.tasks.empty());
+            task = std::move(queue_.tasks.front());
+            DMITIGR_ASSERT(task);
+            queue_.tasks.pop();
           } else
             return;
         }
-        func();
+        task();
       } catch (const std::exception& e) {
         log_error(e.what());
       } catch (...) {
