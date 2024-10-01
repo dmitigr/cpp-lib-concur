@@ -14,8 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#ifdef _WIN32
-#error dmitigr/concur/affinity.hpp is not usable on Microsoft Windows at the moment!
+#ifndef __linux__
+#error dmitigr/concur/affinity.hpp is only usable on Linux at the moment!
 #endif
 
 #ifndef DMITIGR_CONCUR_AFFINITY_HPP

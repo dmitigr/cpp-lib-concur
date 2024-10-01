@@ -17,7 +17,9 @@
 #ifndef DMITIGR_CONCUR_CONCUR_HPP
 #define DMITIGR_CONCUR_CONCUR_HPP
 
+#ifdef __linux__
 #include "affinity.hpp"
+#endif
 #include "exceptions.hpp"
 #include "simple_thread_pool.hpp"
 
