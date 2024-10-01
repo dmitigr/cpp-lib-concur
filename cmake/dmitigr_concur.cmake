@@ -45,6 +45,9 @@ endif()
 # ------------------------------------------------------------------------------
 
 if(DMITIGR_LIBS_TESTS)
-  set(dmitigr_concur_tests pin pool)
+  set(dmitigr_concur_tests pool)
+  if(LINUX)
+    list(APPEND dmitigr_concur_tests pin)
+  endif()
   set(dmitigr_concur_tests_target_link_libraries dmitigr_base)
 endif()
